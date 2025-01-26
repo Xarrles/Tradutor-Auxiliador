@@ -1,59 +1,111 @@
-import win32gui
-import win32con
-import win32api
+import sys
+from PyQt5.QtWidgets import QApplication, QWidget
+from PyQt5.QtGui import QPainter, QPen, QBrush, QColor, QFont
+from PyQt5.QtCore import Qt, QTimer, QThread
 import pyautogui
-import time
+from pytesseract import pytesseract
+from googletrans import Translator
+from PIL import Image
+from io import BytesIO
+import keyboard
+import mouse
 
-class Tradutor:
-    def desenhar_retangulo(self, x, y, largura, altura, texto=None):
-        """
-        Desenha apenas o retângulo mais recente na tela do Windows usando GDI.
-        Remove o desenho anterior ao criar um novo.
-        """
-        hwnd = win32gui.GetDesktopWindow()  # Janela da área de trabalho
-        hdc = win32gui.GetDC(hwnd)         # Contexto de dispositivo
+pytesseract.tesseract_cmd = r'C:\\Program Files\\Tesseract-OCR\\tesseract.exe'
 
+class OCRThread(QThread):
+    def __init__(self, screenshot, callback):
+        super().__init__()
+        self.screenshot = screenshot
+        self.callback = callback
+
+    def run(self):
         try:
-            # Cor e espessura do retângulo
-            pen = win32gui.CreatePen(win32con.PS_SOLID, 2, win32api.RGB(0, 255, 0))
-            brush = win32gui.GetStockObject(win32con.NULL_BRUSH)
+            texto = pytesseract.image_to_string(self.screenshot)
+            if texto.strip():
+                tradutor = Translator()
+                traducao = tradutor.translate(texto, dest="pt")
+                self.callback(texto.strip(), traducao.text)
+            else:
+                self.callback("", "")
+        except Exception as e:
+            self.callback("", f"Erro: {e}")
 
-            old_pen = win32gui.SelectObject(hdc, pen)
-            old_brush = win32gui.SelectObject(hdc, brush)
+class TransparentWindow(QWidget):
+    def __init__(self):
+        super().__init__()
+        self.initUI()
+        self.position_mouse = None
+        self.threads = []  # Lista para armazenar threads ativas
+        self.translated_text = ""  # Texto traduzido para exibir na tela
+        self.font = QFont("Arial", 10)  # Fonte do texto traduzido
 
-            # Limpa a tela na área do retângulo anterior (invalida a área para ser redesenhada)
-            win32gui.InvalidateRect(hwnd, None, True)
+    def initUI(self):
+        self.setWindowFlags(Qt.FramelessWindowHint | Qt.WindowStaysOnTopHint | Qt.Tool)
+        self.setAttribute(Qt.WA_TranslucentBackground)
+        self.setWindowOpacity(0.5)
+        self.setGeometry(0, 0, pyautogui.size().width, pyautogui.size().height)
+        self.timer = QTimer()
+        self.timer.timeout.connect(self.update)
+        self.timer.start(100)  # Atualiza a cada 300ms
+        self.mouse_pos = (0, 0)
 
-            # Desenhar o retângulo
-            win32gui.Rectangle(hdc, x, y, x + largura, y + altura)
+    def paintEvent(self, event):
+        painter = QPainter(self)
+        pen = QPen(Qt.green, 3, Qt.SolidLine)
+        painter.setPen(pen)
+        self.mouse_pos = pyautogui.position()
+        x, y = self.mouse_pos
+        largura, altura = 680, 30
+        x -= largura // 2
+        y -= altura // 2
+        painter.drawRect(x, y, largura, altura)
 
-            # Exibir o texto (se fornecido)
+        # Desenhar fundo opaco para o texto traduzido
+        if self.translated_text:
+            text_x = x
+            text_y = y - 40  # Acima do retângulo
+            text_width = largura
+            text_height = 30
+
+            # Fundo opaco
+            painter.setBrush(QBrush(QColor(250, 250, 250, 250)))  # Fundo preto com transparência
+            painter.setPen(Qt.NoPen)  # Sem borda
+            painter.drawRect(text_x, text_y, text_width, text_height)
+
+            # Desenhar texto
+            painter.setPen(Qt.black)  # Texto branco
+            painter.setFont(self.font)
+            painter.drawText(text_x + 5, text_y + 20, self.translated_text)
+
+        if self.mouse_pos != self.position_mouse:
+            self.position_mouse = self.mouse_pos
+            region = (x, y, largura, altura)
+            screenshot = pyautogui.screenshot(region=region)
+            buffer = BytesIO()
+            screenshot.save(buffer, format="PNG")
+            self.process_ocr(buffer)
+
+    def process_ocr(self, screenshot_buffer):
+        def callback(texto, traducao):
             if texto:
-                win32gui.SetTextColor(hdc, win32api.RGB(255, 255, 255))  # Cor do texto
-                win32gui.SetBkMode(hdc, win32con.TRANSPARENT)  # Fundo transparente
-                texto_pos_x = x
-                texto_pos_y = y - 30  # Texto acima do retângulo
-                win32gui.ExtTextOut(hdc, texto_pos_x, texto_pos_y, 0, None, texto, None)
+                print(f"Texto capturado: {texto}")
+                print(f"Tradução: {traducao}")
+                self.translated_text = traducao  # Atualizar texto traduzido
+            else:
+                self.translated_text = "Nenhum texto detectado."
 
-        finally:
-            # Restaurar os objetos antigos
-            win32gui.SelectObject(hdc, old_pen)
-            win32gui.SelectObject(hdc, old_brush)
-            win32gui.ReleaseDC(hwnd, hdc)
+        # Criar e gerenciar thread
+        thread = OCRThread(Image.open(screenshot_buffer), callback)
+        thread.finished.connect(lambda: self.cleanup_thread(thread))
+        self.threads.append(thread)
+        thread.start()
 
-# Loop para acompanhar o mouse e desenhar o retângulo
-tradutor = Tradutor()
+    def cleanup_thread(self, thread):
+        """Remove threads concluídas da lista."""
+        self.threads.remove(thread)
 
-try:
-    while True:
-        # Posição do mouse e dimensões do retângulo
-        x, y = pyautogui.position()
-        largura = 500
-        altura = 30
-
-        # Atualizar o retângulo na posição do mouse
-        tradutor.desenhar_retangulo(x - largura // 2, y - altura // 2, largura, altura, texto="Seguindo o mouse")
-        time.sleep(0.1)  # Atualiza a cada 100ms
-
-except KeyboardInterrupt:
-    print("Encerrado pelo usuário.")
+if __name__ == '__main__':
+    app = QApplication(sys.argv)
+    window = TransparentWindow()
+    window.show()
+    sys.exit(app.exec_())
