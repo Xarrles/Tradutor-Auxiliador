@@ -1,16 +1,15 @@
 import sys
 from PyQt5.QtWidgets import QApplication, QWidget
 from PyQt5.QtGui import QPainter, QPen, QBrush, QColor, QFont
-from PyQt5.QtCore import Qt, QTimer, QThread
+from PyQt5.QtCore import Qt, QTimer, QThread, QRect
 import pyautogui
 from pytesseract import pytesseract
 from googletrans import Translator
 from PIL import Image
 from io import BytesIO
-import keyboard
-import mouse
 
 pytesseract.tesseract_cmd = r'C:\\Program Files\\Tesseract-OCR\\tesseract.exe'
+
 
 class OCRThread(QThread):
     def __init__(self, screenshot, callback):
@@ -30,56 +29,69 @@ class OCRThread(QThread):
         except Exception as e:
             self.callback("", f"Erro: {e}")
 
+
 class TransparentWindow(QWidget):
     def __init__(self):
         super().__init__()
         self.initUI()
-        self.position_mouse = None
-        self.threads = []  # Lista para armazenar threads ativas
-        self.translated_text = ""  # Texto traduzido para exibir na tela
-        self.font = QFont("Arial", 10)  # Fonte do texto traduzido
+        self.start_pos = None
+        self.end_pos = None
+        self.is_selecting = False
+        self.threads = []
+        self.translated_text = ""
+        self.font = QFont("Arial", 10)
 
     def initUI(self):
         self.setWindowFlags(Qt.FramelessWindowHint | Qt.WindowStaysOnTopHint | Qt.Tool)
         self.setAttribute(Qt.WA_TranslucentBackground)
         self.setWindowOpacity(0.5)
         self.setGeometry(0, 0, pyautogui.size().width, pyautogui.size().height)
-        self.timer = QTimer()
-        self.timer.timeout.connect(self.update)
-        self.timer.start(100)  # Atualiza a cada 300ms
-        self.mouse_pos = (0, 0)
 
     def paintEvent(self, event):
-        painter = QPainter(self)
-        pen = QPen(Qt.green, 3, Qt.SolidLine)
-        painter.setPen(pen)
-        self.mouse_pos = pyautogui.position()
-        x, y = self.mouse_pos
-        largura, altura = 680, 30
-        x -= largura // 2
-        y -= altura // 2
-        painter.drawRect(x, y, largura, altura)
+        if self.start_pos and self.end_pos:
+            painter = QPainter(self)
+            pen = QPen(Qt.green, 3, Qt.SolidLine)
+            painter.setPen(pen)
 
-        # Desenhar fundo opaco para o texto traduzido
-        if self.translated_text:
-            text_x = x
-            text_y = y - 40  # Acima do retângulo
-            text_width = largura
-            text_height = 30
+            # Desenhar o retângulo de seleção
+            rect = QRect(self.start_pos, self.end_pos)
+            painter.drawRect(rect)
 
-            # Fundo opaco
-            painter.setBrush(QBrush(QColor(250, 250, 250, 250)))  # Fundo preto com transparência
-            painter.setPen(Qt.NoPen)  # Sem borda
-            painter.drawRect(text_x, text_y, text_width, text_height)
+            # Exibir texto traduzido, se disponível
+            if self.translated_text:
+                painter.setBrush(QBrush(QColor(250, 250, 250, 250)))
+                painter.setPen(Qt.NoPen)
+                painter.drawRect(rect.x(), rect.y() - 40, rect.width(), 30)
 
-            # Desenhar texto
-            painter.setPen(Qt.black)  # Texto branco
-            painter.setFont(self.font)
-            painter.drawText(text_x + 5, text_y + 20, self.translated_text)
+                painter.setPen(Qt.black)
+                painter.setFont(self.font)
+                painter.drawText(rect.x() + 5, rect.y() - 20, self.translated_text)
 
-        if self.mouse_pos != self.position_mouse:
-            self.position_mouse = self.mouse_pos
-            region = (x, y, largura, altura)
+    def mousePressEvent(self, event):
+        if QApplication.keyboardModifiers() == Qt.ControlModifier and event.button() == Qt.LeftButton:
+            self.start_pos = event.pos()
+            self.end_pos = None
+            self.is_selecting = True
+
+    def mouseMoveEvent(self, event):
+        if self.is_selecting:
+            self.end_pos = event.pos()
+            self.update()
+
+    def mouseReleaseEvent(self, event):
+        if event.button() == Qt.LeftButton and self.is_selecting:
+            self.is_selecting = False
+            self.end_pos = event.pos()
+            self.capture_and_translate()
+
+    def capture_and_translate(self):
+        if self.start_pos and self.end_pos:
+            x1 = min(self.start_pos.x(), self.end_pos.x())
+            y1 = min(self.start_pos.y(), self.end_pos.y())
+            x2 = max(self.start_pos.x(), self.end_pos.x())
+            y2 = max(self.start_pos.y(), self.end_pos.y())
+
+            region = (x1, y1, x2 - x1, y2 - y1)
             screenshot = pyautogui.screenshot(region=region)
             buffer = BytesIO()
             screenshot.save(buffer, format="PNG")
@@ -90,19 +102,19 @@ class TransparentWindow(QWidget):
             if texto:
                 print(f"Texto capturado: {texto}")
                 print(f"Tradução: {traducao}")
-                self.translated_text = traducao  # Atualizar texto traduzido
+                self.translated_text = traducao
             else:
                 self.translated_text = "Nenhum texto detectado."
+            self.update()
 
-        # Criar e gerenciar thread
         thread = OCRThread(Image.open(screenshot_buffer), callback)
         thread.finished.connect(lambda: self.cleanup_thread(thread))
         self.threads.append(thread)
         thread.start()
 
     def cleanup_thread(self, thread):
-        """Remove threads concluídas da lista."""
         self.threads.remove(thread)
+
 
 if __name__ == '__main__':
     app = QApplication(sys.argv)
