@@ -1,13 +1,17 @@
 import sys
 from PyQt5.QtWidgets import QApplication, QMainWindow
-from PyQt5.QtCore import Qt
-from PyQt5.QtGui import QMouseEvent
+from PyQt5.QtCore import Qt, QTimer
+from PyQt5.QtGui import QMouseEvent, QKeyEvent
+
+import pyautogui
+
 
 class MainWindow(QMainWindow):
     def __init__(self):
         super().__init__()
         self.setWindowTitle("Tecla CTRL e Mouse")
         self.setGeometry(100, 100, 800, 600)
+
 
     def mousePressEvent(self, event: QMouseEvent):
         # Verifica se o botão esquerdo do mouse foi clicado
@@ -20,12 +24,12 @@ class MainWindow(QMainWindow):
                 self.start_pos = event.pos()
                 print("Posição inicial: ", self.start_pos)
 
-    def keyPressEvent(self, event):
+    def keyPressEvent(self, event: QKeyEvent):
         # Detecta se a tecla CTRL está pressionada
         if event.key() == Qt.Key_Control:
             print("Tecla CTRL detectada.")
 
-    def keyReleaseEvent(self, event):
+    def keyReleaseEvent(self, event: QKeyEvent):
         # Detecta se a tecla CTRL foi liberada
         if event.key() == Qt.Key_Control:
             print("Tecla CTRL liberada.")
